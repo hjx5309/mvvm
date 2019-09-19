@@ -1,5 +1,75 @@
-class Watcher{}
-class Dep{}
+// 传三个参数 vm ,表达式，更新回调
+class Watcher{
+   constructor(vm,expr,cb){
+      this.cb = cb;
+      this.vm = vm;
+      this.expr = expr;
+      this.oldVlaue = this.get()
+   }
+   get(){
+    Dep.target = this;
+    let value = CompileUtil.getVal(this.vm,this.expr)
+    Dep.target = null;
+    return value
+   }
+   updater(){
+    let newValue = CompileUtil.getVal(this.vm,this.expr)
+     if(this.oldVlaue!==newValue){
+      console.log()
+      this.cb(newValue)
+     }
+      
+   }
+}
+class Dep{
+  constructor(){
+    this.subs = [];
+  }
+  addSubs(watcher){
+    this.subs.push(watcher)
+  }
+  notify(){
+    this.subs.forEach(watcher=>{
+      watcher.updater()
+    })
+  }
+}
+class Observer{
+   constructor(data){
+     this.data = data;
+     this.addObserver(this.data )
+   }
+   addObserver(data){
+     if(data&&typeof(data)=="object"){
+       console.log(typeof(data),data);
+       // 遍历对象,每个属性挨个
+       for(let key in data){
+        this.ResObserver(data,key,data[key])
+       }
+     
+     }
+   }
+   ResObserver(data,key,value){
+       // 如果对应的键值对也是对象，递归监听
+      this.addObserver(data[key])
+       let dep = new Dep()
+       Object.defineProperty(data,key,{
+          get:()=>{
+            Dep.target&&dep.addSubs(Dep.target)
+            return value
+          },
+          set:(newVal)=>{
+             value = newVal;
+             // 发布事件
+             dep.notify()
+             // 如果有了新的值继续递归监听
+             this.addObserver(data[key])
+          },
+       })
+   
+    
+   }
+}
 class Complier{
   constructor(el,vm){
     // 判断是否是节点,是节点就赋值，不是说就document.querySelector节点不属于文档树，
@@ -28,9 +98,13 @@ class Complier{
      let {name,value:expr} = attr;
      if(this.isDirective(name)){
        // 取数组的第二个元素
-       let [,directive] = name.split("-")
+       let [,fn] = name.split("-");
+       // 点击事件
+       let [directive,event] = fn.split(":");
+       console.log(directive);
+     //  console.log(event);
        // 从vm上所定义的data上查找数据
-       CompileUtil[directive](node,expr,this.vm);
+       CompileUtil[directive](node,expr,this.vm,event);
      }
    })
    
@@ -86,15 +160,50 @@ const CompileUtil = {
       return this.getVal(vm,arg[1])
     })
   },
-  model(node,expr,vm){// node是节点，expr是表达式，vm是实例对象
+  // 事件
+  on(node,expr,vm,event){
+    node.addEventListener(event,(e)=>{
+      vm[expr].call(vm,e)
+    })
+  },
+  model(node,expr,vm,event){// node是节点，expr是表达式，vm是实例对象
     let fn = this.updater["modelUpdater"];
-    fn(node,this.getVal(vm,expr))
+    let value = this.getVal(vm,expr);
+    // 监听输入方法，获取值以后去赋值；这样触发订阅者
+    node.addEventListener("input",(e)=>{
+      var value = e.target.value;
+      this.setContent(vm,expr,value)
+    })
+    if(event){
+      this.on(node,expr,vm,event)
+    }
+    new Watcher(vm,expr,(value)=>{
+      fn(node,value)
+    })
+    fn(node,value)
+  },
+  //
+  setContent(vm,expr,value){
+     expr.split(".").reduce((data,currunt,index,arr)=>{
+      if(index==arr.length-1){
+        data[currunt] =value
+      }
+      return data[currunt]
+    },vm.$data)
   },
   text(node,expr,vm){
     let fn = this.updater["textUpdate"];
+    expr.replace(/\{\{(.+?)\}\}/g,(...arg)=>{
+      new Watcher(vm,arg[1],()=>{
+        fn(node,this.getTextVal(vm,expr))
+      })
+      return this.getVal(vm,arg[1])
+    })
+  
     fn(node,this.getTextVal(vm,expr))
   },
   updater:{
+    // 设置input标签里面的值
     modelUpdater(node,value){
       node.value = value
     },
@@ -109,10 +218,42 @@ class Vue{
   constructor(options){
     // 渲染节点
     this.$el = options.el;
+    this.computed = options.computed || {};
+    this.methods = options.methods || {};
     // 节点数据
     this.$data = options.data;
     if(this.$el){
+        // 劫持this.$data上的数据
+        new Observer(this.$data);
+        this.proxyVm(this.$data);
+        // 计算属性,将computer里面的属性劫持到data上，当CompileUtil.getVal()时，他就会去寻找vm.data被劫持的属性，此时get返回的就是定义在computed上的值
+        for(let key in this.computed){
+          Object.defineProperty(this.$data,key,{
+            get:()=>{        
+              return this.computed[key].call(this)
+            }
+          })
+        }
+        for(var key in this.methods){
+          Object.defineProperty(this,key,{
+            get:()=>{                
+              return this.methods[key]
+            }
+          })
+        }
         new Complier(this.$el,this)
+    }
+  }
+  proxyVm(data){
+    for(var key in data){
+       Object.defineProperty(this,key,{
+         get:()=>{
+           return data[key]
+         },
+         set(newVal){
+           data[key] = newVal
+         }
+       })
     }
   }
 }
